@@ -62,7 +62,7 @@ func startPodConnectionParty() {
 							log.Println(fmt.Sprintf("Sending request to %s on port %d", podLists[i].Items[j].Status.PodIP, portsToConnectOn[k]))
 
 							// Attempt to connect to the pod
-							resp, err := http.Get(fmt.Sprintf("http://%s:%d/connect", string(podLists[i].Items[j].Status.PodIP), portsToConnectOn[k]))
+							resp, err := http.Get(fmt.Sprintf("http://%s:%d", string(podLists[i].Items[j].Status.PodIP), portsToConnectOn[k]))
 
 							if err == nil { // is successful, print out the response
 								log.Println(resp)
@@ -86,9 +86,9 @@ func startServer(listeningPort int) {
 		w.Write([]byte(fmt.Sprintf("Successfully connected to pod %s in namespace %s on port %s!\n", podName, podNamespace, req.URL.Port())))
 	}
 
-	log.Println(fmt.Sprintf("Listening for requests at http://localhost:%d/connect", listeningPort))
+	log.Println(fmt.Sprintf("Listening for requests at http://localhost:%d", listeningPort))
 
-	http.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", listeningPort), http.HandlerFunc(handleFunc))
+	http.ListenAndServe(fmt.Sprintf(":%d", listeningPort), http.HandlerFunc(handleFunc))
 }
 
 func main() {
