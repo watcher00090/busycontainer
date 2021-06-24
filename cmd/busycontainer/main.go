@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -31,41 +30,49 @@ func startPodConnectionParty() {
 		panic(err.Error())
 	}
 
-	// creates the clientset
+	// Create the clientset
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		panic(err.Error())
 	}
 
-	// Get all the pods in the target namespaces
-	for i := 0; i < numNamespaces; i++ {
-		podLists[i], err = clientset.CoreV1().Pods(namespaces[i]).List(context.TODO(), metav1.ListOptions{})
-		if err != nil {
-			panic(err.Error())
-		}
-	}
-
 	for {
-		// Loop through all pods
-		for i := 0; i < len(podLists); i++ {
-			for j := 0; j < len(podLists[i].Items); j++ {
+		var skipIteration = false
 
-				// Check that we're not connecting to this pod
-				if podLists[i].Items[j].ObjectMeta.Name != podName || podLists[i].Items[j].ObjectMeta.Namespace != podNamespace {
+		// Get all the pods in the target namespaces
+		// Repeated so that we handle the case that some of the pods are still creating
+		for i := 0; i < numNamespaces; i++ {
+			podLists[i], err = clientset.CoreV1().Pods(namespaces[i]).List(context.TODO(), metav1.ListOptions{})
+			if err != nil {
+				skipIteration = true
+				log.Println(fmt.Sprintf("ERROR: unable to get all pods in namespace %s: %s", namespaces[i], err.Error()))
+			}
+		}
+		if !skipIteration {
+			// Loop through all pods
+			for i := 0; i < len(podLists); i++ {
+				for j := 0; j < len(podLists[i].Items); j++ {
 
-					// Loop through all given ports
-					for k := 0; k < len(portsToConnectOn); k++ {
+					// Check that we're not connecting to this pod, and also that the pod has the label 'type: target'
+					if (podLists[i].Items[j].ObjectMeta.Name != podName || podLists[i].Items[j].ObjectMeta.Namespace != podNamespace) && podLists[i].Items[j].ObjectMeta.Labels["type"] == "target" {
 
-						// attempt to connect to the pod
-						resp, err := http.Get(fmt.Sprintf("http://%s:%d/connect", string(podLists[i].Items[j].Status.PodIP), portsToConnectOn[k]))
-						if err == nil { // is successful, print out the response
-							log.Println(resp)
-						} else { // print out the error message if unsuccessful
-							log.Println(fmt.Sprintf("Unable to connect to pod %s in namespace %s on port %d: %s", podLists[i].Items[j].ObjectMeta.Name, podLists[i].Items[j].ObjectMeta.Namespace, portsToConnectOn[k], err.Error()))
+						// Loop through all given ports
+						for k := 0; k < len(portsToConnectOn); k++ {
+
+							log.Println(fmt.Sprintf("Sending request to %s on port %d", podLists[i].Items[j].Status.PodIP, portsToConnectOn[k]))
+
+							// Attempt to connect to the pod
+							resp, err := http.Get(fmt.Sprintf("http://%s:%d/connect", string(podLists[i].Items[j].Status.PodIP), portsToConnectOn[k]))
+
+							if err == nil { // is successful, print out the response
+								log.Println(resp)
+							} else { // print out the error message if unsuccessful
+								log.Println(fmt.Sprintf("Unable to connect to pod %s in namespace %s on port %d: %s", podLists[i].Items[j].ObjectMeta.Name, podLists[i].Items[j].ObjectMeta.Namespace, portsToConnectOn[k], err.Error()))
+							}
 						}
 					}
-				}
 
+				}
 			}
 		}
 
@@ -74,18 +81,23 @@ func startPodConnectionParty() {
 
 }
 
+func startServer(listeningPort int) {
+	handleFunc := func(w http.ResponseWriter, req *http.Request) {
+		w.Write([]byte(fmt.Sprintf("Successfully connected to pod %s in namespace %s on port %s!\n", podName, podNamespace, req.URL.Port())))
+	}
+
+	log.Println(fmt.Sprintf("Listening for requests at http://localhost:%d/connect", listeningPort))
+
+	http.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", listeningPort), http.HandlerFunc(handleFunc))
+}
+
 func main() {
+	for i := 0; i < len(portsToConnectOn); i++ {
+		go startServer(portsToConnectOn[i])
+	}
 
 	go startPodConnectionParty()
 
-	var handlerFuncs = make([]func(w http.ResponseWriter, req *http.Request), len(portsToConnectOn))
-
-	for i := 0; i < len(portsToConnectOn); i++ {
-		handlerFuncs[i] = func(w http.ResponseWriter, req *http.Request) {
-			io.WriteString(w, fmt.Sprintf("Successfully connected to pod %s in namespace %s on port %d!\n", podName, podNamespace, portsToConnectOn[i]))
-		}
-
-		log.Println(fmt.Sprintf("Listening for requests at http://localhost:%d/connect", portsToConnectOn[i]))
-		go http.ListenAndServe(fmt.Sprintf(":%d", portsToConnectOn[i]), http.HandlerFunc(handlerFuncs[i]))
-	}
+	// Block the main thread until the process ends
+	<-make(chan int)
 }
